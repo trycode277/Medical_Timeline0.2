@@ -1,0 +1,69 @@
+name: medical-timeline
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-timeline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-timeline}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        OCR_LANGS: ${OCR_LANGS:-eng}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Override DATABASE_URL to use a managed Postgres (RDS, Cloud SQL, ...)
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-timeline}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-timeline}}
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:8080"]}'
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-eng}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      ENVIRONMENT: ${ENVIRONMENT:-production}   # production refuses to start with missing keys / default DB password
+      UPLOAD_SWEEP_MAX_AGE_MINUTES: ${UPLOAD_SWEEP_MAX_AGE_MINUTES:-60}
+    # Privacy: uploads live in RAM only (gone on restart) and are deleted right after processing.
+    # Size must cover concurrent uploads (up to 20 files x MAX_UPLOAD_MB per request).
+    tmpfs:
+      - /data/uploads:mode=0700,uid=10001,gid=10001,size=${UPLOAD_TMPFS_SIZE:-2g}
+      - /tmp:size=256m
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # No published ports: reachable only through the frontend proxy (see override file for local dev)
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_URL: http://backend:8000
+      NGINX_MAX_BODY: ${NGINX_MAX_BODY:-600m}
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+volumes:
+  pgdata:   # PostgreSQL data (persistent)

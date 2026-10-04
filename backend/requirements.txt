@@ -1,0 +1,15 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlmodel>=0.0.22
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29
+pydantic-settings>=2.4
+python-multipart>=0.0.9
+
+# Intelligence layer
+langchain-core>=0.3
+langchain-anthropic>=0.3
+langchain-openai>=0.3        # only needed when LLM_PROVIDER=openai
+pymupdf>=1.24
+pytesseract>=0.3.10
+pillow>=10.3

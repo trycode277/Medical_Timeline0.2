@@ -1,0 +1,46 @@
+server {
+    listen 8080;
+    server_name _;
+    server_tokens off;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Backend allows 20 files x 25 MB per upload request
+    client_max_body_size ${NGINX_MAX_BODY};
+
+    gzip on;
+    gzip_min_length 1024;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    # If VITE_API_URL points to another origin, add it to connect-src
+    add_header Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+
+    # Only /api is proxied: the backend's /docs, /openapi.json and /health are not exposed publicly
+    location /api/ {
+        proxy_pass ${BACKEND_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;   # stream large uploads straight through
+        proxy_read_timeout 120s;       # AI summary calls can take a while
+        proxy_send_timeout 300s;
+    }
+
+    # Hashed build assets: cache for a year
+    location /assets/ {
+        expires 1y;
+        try_files $uri =404;
+    }
+
+    # SPA fallback; always revalidate index.html so new deploys are picked up
+    location / {
+        expires -1;
+        try_files $uri $uri/ /index.html;
+    }
+}
