@@ -41,7 +41,26 @@ def test_production_rejects_wildcard_cors():
 
 
 def test_valid_production_config_passes():
-    check_production_settings(make(environment="production", anthropic_api_key="k", database_url=GOOD_DB))
+    check_production_settings(
+        make(
+            environment="production",
+            anthropic_api_key="k",
+            database_url=GOOD_DB,
+            jwt_secret_key="a" * 32,
+        )
+    )
+
+
+def test_production_requires_a_strong_jwt_secret():
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        check_production_settings(
+            make(
+                environment="production",
+                anthropic_api_key="k",
+                database_url=GOOD_DB,
+                jwt_secret_key="short",
+            )
+        )
 
 
 def test_openai_provider_checks_the_openai_key():

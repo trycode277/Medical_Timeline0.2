@@ -2,7 +2,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,9 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "production"] = "development"
     app_name: str = "Patient Medical Timeline API"
+    jwt_secret_key: SecretStr = SecretStr("")
+    jwt_algorithm: Literal["HS256"] = "HS256"
+    jwt_access_token_expire_minutes: int = Field(default=60, ge=1)
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/timeline"
     db_echo: bool = False
 
@@ -35,6 +38,7 @@ class Settings(BaseSettings):
     # --- LLM extraction ---
     llm_provider: Literal["anthropic", "openai", "ollama"] = "anthropic"
     llm_model: str = "claude-sonnet-5-5"   # e.g. "gpt-4o" when llm_provider="openai"
+    ollama_base_url: str = "http://localhost:11434"
     anthropic_api_key: SecretStr | None = None   # SecretStr: masked in repr/logs
     openai_api_key: SecretStr | None = None
     llm_max_tokens: int = 4096
@@ -88,6 +92,10 @@ def check_production_settings(s: Settings) -> None:
 
     if "*" in s.cors_origins:
         problems.append("CORS_ORIGINS must not contain '*'")
+
+    jwt_secret = s.jwt_secret_key.get_secret_value()
+    if len(jwt_secret.encode("utf-8")) < 32:
+        problems.append("JWT_SECRET_KEY must contain at least 32 bytes")
 
     if problems:
         raise RuntimeError(

@@ -3,15 +3,16 @@ from enum import Enum
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import asc, col, desc, func, or_, select
 
-from app.api.deps import SessionDep
+from app.api.deps import SessionDep, get_current_user
 from app.models.base import utcnow
-from app.models.enums import EventType
+from app.models.enums import AccountType, EventType
 from app.models.event import MedicalEvent
 from app.models.patient import Patient
 from app.models.record import MedicalRecord
+from app.models.user import User
 from app.schemas.event import EventCreate, EventPage, EventRead, EventUpdate
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -38,7 +39,7 @@ async def _get_event_or_404(session: SessionDep, event_id: UUID) -> MedicalEvent
 @router.get("", response_model=EventPage)
 async def list_events(
     session: SessionDep,
-    patient_id: UUID | None = None,
+    current_user: Annotated[User, Depends(get_current_user)],
     record_id: UUID | None = None,
     event_type: Annotated[list[EventType] | None, Query()] = None,
     date_from: date | None = None,
@@ -52,12 +53,26 @@ async def list_events(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
+    if current_user.account_type != AccountType.PATIENT:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only patient accounts can view medical events.",
+        )
+
+    patient_result = await session.exec(
+        select(Patient).where(Patient.user_id == current_user.id)
+    )
+    patient = patient_result.one_or_none()
+    if patient is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This patient account is not linked to a patient record.",
+        )
+
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "date_from must be <= date_to.")
 
-    conditions = []
-    if patient_id:
-        conditions.append(col(MedicalEvent.patient_id) == patient_id)
+    conditions = [col(MedicalEvent.patient_id) == patient.id]
     if record_id:
         conditions.append(col(MedicalEvent.record_id) == record_id)
     if event_type:

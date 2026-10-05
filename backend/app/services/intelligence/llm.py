@@ -17,6 +17,7 @@ def get_chat_model() -> BaseChatModel:
         return ChatOllama(
             model=settings.llm_model,
             temperature=0,
+            base_url=settings.ollama_base_url,
         )
 
     # Anthropic

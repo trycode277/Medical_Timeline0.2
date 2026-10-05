@@ -1,4 +1,5 @@
 import {
+  Alert,
   StyleSheet,
   Text,
   TextInput,
@@ -9,6 +10,38 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useState } from "react";
+import { API_BASE_URL } from "@/config/api";
+
+type AccountType = "patient" | "caregiver" | "clinician";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getBackendErrorMessage(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const detail = value.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) =>
+        isRecord(item) && typeof item.msg === "string" ? item.msg : undefined,
+      )
+      .filter((message): message is string => message !== undefined);
+
+    if (messages.length > 0) {
+      return messages.join("\n");
+    }
+  }
+
+  return undefined;
+}
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -16,6 +49,86 @@ export default function RegisterScreen() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [accountType, setAccountType] = useState<AccountType>("patient");
+  const [isLoading, setIsLoading] = useState(false);
+
+  async function handleRegister() {
+    const fullName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!fullName) {
+      Alert.alert("Create Account", "Please enter your full name.");
+      return;
+    }
+
+    if (!normalizedEmail) {
+      Alert.alert("Create Account", "Please enter your email address.");
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      Alert.alert("Create Account", "Please enter a valid email address.");
+      return;
+    }
+
+    if (!password) {
+      Alert.alert("Create Account", "Please enter a password.");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            full_name: fullName,
+            email: normalizedEmail,
+            password,
+            account_type: accountType,
+          }),
+        });
+      } catch {
+        Alert.alert(
+          "Connection Error",
+          "Your phone cannot connect to the backend. Make sure your phone and laptop are connected to the same Wi-Fi network.",
+        );
+        return;
+      }
+
+      const responseData: unknown = await response.json().catch(() => null);
+
+      if (response.status === 409) {
+        Alert.alert(
+          "Create Account",
+          "An account with this email already exists.",
+        );
+        return;
+      }
+
+      if (!response.ok) {
+        Alert.alert(
+          "Registration Failed",
+          getBackendErrorMessage(responseData) ??
+            "Unable to create your account. Please check your details and try again.",
+        );
+        return;
+      }
+
+      Alert.alert(
+        "Account Created",
+        "Account created successfully. Please sign in.",
+        [{ text: "Sign In", onPress: () => router.replace("/login") }],
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -82,31 +195,50 @@ export default function RegisterScreen() {
           <Text style={styles.label}>Account type</Text>
 
           <View style={styles.roleRow}>
-            <Pressable style={styles.roleButton}>
+            <Pressable
+              style={[
+                styles.roleButton,
+                accountType === "patient" && styles.selectedRoleButton,
+              ]}
+              onPress={() => setAccountType("patient")}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: accountType === "patient" }}
+            >
               <Text style={styles.roleText}>Patient</Text>
             </Pressable>
 
-            <Pressable style={styles.roleButton}>
+            <Pressable
+              style={[
+                styles.roleButton,
+                accountType === "caregiver" && styles.selectedRoleButton,
+              ]}
+              onPress={() => setAccountType("caregiver")}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: accountType === "caregiver" }}
+            >
               <Text style={styles.roleText}>Caregiver</Text>
             </Pressable>
 
-            <Pressable style={styles.roleButton}>
+            <Pressable
+              style={[
+                styles.roleButton,
+                accountType === "clinician" && styles.selectedRoleButton,
+              ]}
+              onPress={() => setAccountType("clinician")}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: accountType === "clinician" }}
+            >
               <Text style={styles.roleText}>Clinician</Text>
             </Pressable>
           </View>
 
           <Pressable
             style={styles.registerButton}
-            onPress={() => {
-              console.log("Registration:", {
-                name,
-                email,
-                password,
-              });
-            }}
+            onPress={handleRegister}
+            disabled={isLoading}
           >
             <Text style={styles.registerButtonText}>
-              Create Account
+              {isLoading ? "Creating account..." : "Create Account"}
             </Text>
           </Pressable>
 
@@ -217,6 +349,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 13,
     alignItems: "center",
+  },
+
+  selectedRoleButton: {
+    borderColor: "#0F766E",
+    backgroundColor: "#F0FDFA",
   },
 
   roleText: {

@@ -1,4 +1,5 @@
 import { useRouter } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import { useState } from "react";
 import {
   Alert,
@@ -9,11 +10,152 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { API_BASE_URL } from "@/config/api";
+
+type LoginResponse = {
+  access_token: string;
+  user: Record<string, unknown>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isLoginResponse(value: unknown): value is LoginResponse {
+  return (
+    isRecord(value) &&
+    typeof value.access_token === "string" &&
+    isRecord(value.user)
+  );
+}
+
+function getErrorMessage(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const detail = value.detail;
+  if (typeof detail === "string") {
+    return detail;
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) =>
+        isRecord(item) && typeof item.msg === "string" ? item.msg : undefined,
+      )
+      .filter((message): message is string => message !== undefined);
+
+    if (messages.length > 0) {
+      return messages.join("\n");
+    }
+  }
+
+  return undefined;
+}
+
+function getHttpErrorMessage(status: number, data: unknown): string {
+  const detail = getErrorMessage(data);
+
+  if (status === 401) {
+    return "Invalid email or password.";
+  }
+
+  if (status === 422) {
+    return detail ?? "The login request failed validation (HTTP 422).";
+  }
+
+  if (status === 503) {
+    return detail
+      ? `Backend authentication is not configured correctly. ${detail}`
+      : "Backend authentication is not configured correctly.";
+  }
+
+  return detail
+    ? `Request failed with HTTP ${status}. ${detail}`
+    : `Request failed with HTTP ${status}.`;
+}
 
 export default function LoginScreen() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+
+  async function handleSignIn() {
+    if (!email.trim() || !password) {
+      Alert.alert("Sign In", "Please enter your email and password.");
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: email.trim().toLowerCase(),
+            password,
+          }),
+        });
+      } catch {
+        Alert.alert(
+          "Connection Error",
+          "Unable to connect to the backend. Check that your phone and laptop are on the same Wi-Fi.",
+        );
+        return;
+      }
+
+      let responseData: unknown = null;
+      try {
+        responseData = await response.json();
+      } catch {
+        responseData = null;
+      }
+
+      if (!response.ok) {
+        Alert.alert(
+          "Sign In Failed",
+          getHttpErrorMessage(response.status, responseData),
+        );
+        return;
+      }
+
+      if (!isLoginResponse(responseData)) {
+        Alert.alert(
+          "Sign In Failed",
+          "The backend returned an unexpected response. Please try again.",
+        );
+        return;
+      }
+
+      try {
+        await SecureStore.setItemAsync(
+          "access_token",
+          responseData.access_token,
+        );
+        await SecureStore.setItemAsync(
+          "user",
+          JSON.stringify(responseData.user),
+        );
+      } catch {
+        Alert.alert(
+          "Sign In Failed",
+          "Your session could not be saved securely. Please try again.",
+        );
+        return;
+      }
+
+      router.replace("/explore");
+    } finally {
+      setIsLoading(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -65,14 +207,12 @@ export default function LoginScreen() {
 
           <Pressable
             style={styles.primaryButton}
-            onPress={() =>
-              Alert.alert(
-                "Sign In",
-                "Authentication is not connected yet.",
-              )
-            }
+            onPress={handleSignIn}
+            disabled={isLoading}
           >
-            <Text style={styles.primaryButtonText}>Sign In</Text>
+            <Text style={styles.primaryButtonText}>
+              {isLoading ? "Signing in..." : "Sign In"}
+            </Text>
           </Pressable>
 
           <Pressable onPress={() => router.push("/register")}>

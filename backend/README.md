@@ -15,17 +15,26 @@ Docs: http://localhost:8000/docs
 
 ## Try it
 ```bash
-# 1. create a patient
-curl -X POST localhost:8000/api/patients -H 'Content-Type: application/json' \
-  -d '{"first_name":"Jane","last_name":"Doe"}'
+# 1. register a patient account, then log in to get its bearer token
+curl -X POST localhost:8000/api/auth/register -H 'Content-Type: application/json' \
+  -d '{"full_name":"Jane Doe","email":"jane@example.com","password":"change-this-password","account_type":"patient"}'
 
-# 2. upload records (returns 202 + record ids; poll /api/records/{id})
+# 2. log in, then upload records for the authenticated user's linked patient
+#    (returns 202 + record ids; poll /api/records/{id})
 curl -X POST localhost:8000/api/records/upload \
-  -F patient_id=<PATIENT_ID> -F files=@scan.pdf -F files=@page2.png
+  -H 'Authorization: Bearer <ACCESS_TOKEN>' \
+  -F files=@scan.pdf -F files=@page2.png
 
 # 3. filter / search events
 curl "localhost:8000/api/events?patient_id=<ID>&event_type=test&event_type=diagnosis&date_from=2024-01-01&q=glucose"
 ```
+
+Patient-account registration creates a linked patient profile from the supplied full name.
+Caregiver and clinician registrations do not create patient profiles. Existing patient rows
+remain unlinked after the additive startup schema update; existing users are never matched
+automatically. An administrator must explicitly verify and associate any existing account
+and patient record before that account can upload. Upload requests derive the patient from
+the authenticated user's linked profile and do not accept a client-selected patient ID.
 
 ## Layout
 ```

@@ -2,6 +2,6 @@
 # In production run: docker compose -f docker-compose.yml up -d --build
 services:
   db:
-    ports: ["127.0.0.1:5432:5432"]      # psql / GUI clients
+    ports: ["127.0.0.1:5432:5432"]
   backend:
-    ports: ["127.0.0.1:8000:8000"]      # Swagger UI at http://localhost:8000/docs
+    ports: ["8000:8000"]

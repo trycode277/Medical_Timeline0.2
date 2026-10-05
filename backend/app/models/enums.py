@@ -18,6 +18,12 @@ class ProcessingStatus(str, Enum):
     FAILED = "failed"
 
 
+class AccountType(str, Enum):
+    PATIENT = "patient"
+    CAREGIVER = "caregiver"
+    CLINICIAN = "clinician"
+
+
 def pg_enum(enum_cls: type[Enum], name: str) -> SAEnum:
     """Postgres enum that stores the lowercase values, not the member names."""
     return SAEnum(enum_cls, name=name, values_callable=lambda e: [m.value for m in e])

@@ -1,5 +1,6 @@
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
@@ -9,7 +10,8 @@ import app.models  # noqa: F401  (registers tables)
 from app.core.config import settings
 from app.core.database import get_session
 from app.main import app as fastapi_app
-from app.models import Patient
+from app.core.security import create_access_token
+from app.models import AccountType, Patient, User
 
 
 @pytest_asyncio.fixture
@@ -46,3 +48,24 @@ async def patient(session_factory):
         session.add(p)
         await session.commit()
         return p
+
+
+@pytest_asyncio.fixture
+async def registered_patient(session_factory, monkeypatch):
+    monkeypatch.setattr(
+        settings,
+        "jwt_secret_key",
+        SecretStr("test-only-secret-key-with-at-least-32-bytes"),
+    )
+    async with session_factory() as session:
+        user = User(
+            full_name="Jane Testpatient",
+            email="jane.testpatient@example.com",
+            password_hash="not-used-by-this-test",
+            account_type=AccountType.PATIENT,
+        )
+        patient = Patient(first_name="Jane", last_name="Testpatient", user=user)
+        session.add(user)
+        await session.commit()
+        await session.refresh(patient)
+        return patient, create_access_token(user.id)

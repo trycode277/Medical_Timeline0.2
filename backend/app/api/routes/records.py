@@ -1,13 +1,15 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from sqlmodel import col, select
 
-from app.api.deps import SessionDep
+from app.api.deps import SessionDep, get_current_user
 from app.core.config import settings
+from app.models.enums import AccountType
 from app.models.patient import Patient
 from app.models.record import MedicalRecord
+from app.models.user import User
 from app.schemas.record import RecordRead
 from app.services.pipeline import process_record
 from app.services.storage import StoredFile, save_upload_temporarily
@@ -19,7 +21,7 @@ router = APIRouter(prefix="/records", tags=["records"])
 async def upload_records(
     background_tasks: BackgroundTasks,
     session: SessionDep,
-    patient_id: Annotated[UUID, Form()],
+    current_user: Annotated[User, Depends(get_current_user)],
     files: Annotated[list[UploadFile], File(description="One or more PDF/image files")],
 ):
     """Accept PDF/image uploads (a multi-page PDF is one file). Each file becomes a
@@ -34,8 +36,22 @@ async def upload_records(
             status.HTTP_400_BAD_REQUEST,
             f"Too many files (max {settings.max_files_per_upload}).",
         )
-    if await session.get(Patient, patient_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Patient not found.")
+    if current_user.account_type != AccountType.PATIENT:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only patient accounts can upload medical records.",
+        )
+
+    patient_result = await session.exec(
+        select(Patient).where(Patient.user_id == current_user.id)
+    )
+    patient = patient_result.one_or_none()
+    if patient is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This patient account is not linked to a patient record.",
+        )
+    patient_id = patient.id
 
     stored: list[StoredFile] = []
     records: list[MedicalRecord] = []
@@ -67,13 +83,29 @@ async def upload_records(
 @router.get("", response_model=list[RecordRead])
 async def list_records(
     session: SessionDep,
-    patient_id: UUID | None = None,
+    current_user: Annotated[User, Depends(get_current_user)],
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-):
-    stmt = select(MedicalRecord)
-    if patient_id:
-        stmt = stmt.where(col(MedicalRecord.patient_id) == patient_id)
+) -> list[RecordRead]:
+    if current_user.account_type != AccountType.PATIENT:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only patient accounts can view medical records.",
+        )
+
+    patient_result = await session.exec(
+        select(Patient).where(Patient.user_id == current_user.id)
+    )
+    patient = patient_result.one_or_none()
+    if patient is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This patient account is not linked to a patient record.",
+        )
+
+    stmt = select(MedicalRecord).where(
+        col(MedicalRecord.patient_id) == patient.id
+    )
     stmt = stmt.order_by(col(MedicalRecord.uploaded_at).desc()).limit(limit).offset(offset)
     return (await session.exec(stmt)).all()
 

@@ -25,3 +25,33 @@ async def init_db() -> None:
         # Serialize schema creation across uvicorn workers / replicas starting together
         await conn.execute(text("SELECT pg_advisory_xact_lock(72656311)"))
         await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.execute(
+            text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS user_id UUID")
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'fk_patients_user_id_users'
+                          AND conrelid = 'patients'::regclass
+                    ) THEN
+                        ALTER TABLE patients
+                        ADD CONSTRAINT fk_patients_user_id_users
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL;
+                    END IF;
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'uq_patients_user_id'
+                          AND conrelid = 'patients'::regclass
+                    ) THEN
+                        ALTER TABLE patients
+                        ADD CONSTRAINT uq_patients_user_id UNIQUE (user_id);
+                    END IF;
+                END
+                $$;
+                """
+            )
+        )
