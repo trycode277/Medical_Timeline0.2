@@ -1,13 +1,13 @@
 import { useRouter } from "expo-router";
 import { File } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -36,11 +36,11 @@ type MedicalEvent = {
   record_id: string | null;
   event_type: string;
   event_date: string;
-  title: string | null;
+  title?: string | null;
   description: string;
-  provider: string | null;
-  source_page: number | null;
-  confidence: number | null;
+  provider?: string | null;
+  source_page?: number | null;
+  confidence?: number | null;
 };
 
 type EventCategory =
@@ -50,6 +50,8 @@ type EventCategory =
   | "Diagnoses"
   | "Treatments"
   | "Medications";
+
+type SummaryEventCategory = Exclude<EventCategory, "All">;
 
 type TimelineGroup = {
   key: string;
@@ -65,6 +67,24 @@ const EVENT_CATEGORIES: EventCategory[] = [
   "Treatments",
   "Medications",
 ];
+
+const SUMMARY_EVENT_CATEGORIES: SummaryEventCategory[] = [
+  "Tests",
+  "Visits",
+  "Diagnoses",
+  "Treatments",
+  "Medications",
+];
+
+function getNonEmptyText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const text = value.trim();
+  return text && !["null", "undefined", "nan"].includes(text.toLowerCase())
+    ? text
+    : null;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -93,11 +113,19 @@ function isMedicalEvent(value: unknown): value is MedicalEvent {
     (typeof value.record_id === "string" || value.record_id === null) &&
     typeof value.event_type === "string" &&
     typeof value.event_date === "string" &&
-    (typeof value.title === "string" || value.title === null) &&
+    (value.title === undefined ||
+      typeof value.title === "string" ||
+      value.title === null) &&
     typeof value.description === "string" &&
-    (typeof value.provider === "string" || value.provider === null) &&
-    (typeof value.source_page === "number" || value.source_page === null) &&
-    (typeof value.confidence === "number" || value.confidence === null)
+    (value.provider === undefined ||
+      typeof value.provider === "string" ||
+      value.provider === null) &&
+    (value.source_page === undefined ||
+      typeof value.source_page === "number" ||
+      value.source_page === null) &&
+    (value.confidence === undefined ||
+      typeof value.confidence === "number" ||
+      value.confidence === null)
   );
 }
 
@@ -126,7 +154,11 @@ function getRecordStatusLabel(status: string): string {
 }
 
 function formatEventType(eventType: string): string {
-  return eventType
+  const label = getNonEmptyText(eventType);
+  if (!label) {
+    return "";
+  }
+  return label
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
@@ -164,7 +196,9 @@ function getEventDateKey(value: string): string | null {
 }
 
 function getEventCategory(eventType: string): EventCategory | null {
-  const normalized = eventType.toLowerCase().replace(/[^a-z]/g, "");
+  const normalized = (getNonEmptyText(eventType) ?? "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
   if (normalized.includes("visit") || normalized.includes("appointment")) {
     return "Visits";
   }
@@ -185,6 +219,27 @@ function getEventCategory(eventType: string): EventCategory | null {
     return "Medications";
   }
   return null;
+}
+
+function getSummaryCategoryLabel(
+  category: SummaryEventCategory,
+  count: number,
+): string {
+  if (count === 1) {
+    switch (category) {
+      case "Visits":
+        return "Visit";
+      case "Tests":
+        return "Test";
+      case "Diagnoses":
+        return "Diagnosis";
+      case "Treatments":
+        return "Treatment";
+      case "Medications":
+        return "Medication";
+    }
+  }
+  return category;
 }
 
 function getEventCategoryStyle(eventType: string) {
@@ -245,6 +300,16 @@ function parseStoredUser(value: string): StoredUser | null {
   };
 }
 
+function formatAccountType(value: string | undefined): string {
+  const accountType = getNonEmptyText(value);
+  if (!accountType) {
+    return "Not available";
+  }
+  return accountType
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 function getDocumentType(file: File): string | undefined {
   const mimeType = file.type?.toLowerCase();
   if (mimeType === "application/pdf") {
@@ -293,13 +358,13 @@ function getBackendDetail(data: unknown): string | undefined {
   }
 
   if (typeof data.detail === "string") {
-    return data.detail;
+    return getNonEmptyText(data.detail) ?? undefined;
   }
 
   if (Array.isArray(data.detail)) {
     const messages = data.detail
       .map((item) =>
-        isRecord(item) && typeof item.msg === "string" ? item.msg : undefined,
+        isRecord(item) ? getNonEmptyText(item.msg) ?? undefined : undefined,
       )
       .filter((message): message is string => message !== undefined);
     if (messages.length > 0) {
@@ -318,12 +383,8 @@ function getUploadedRecordDetails(data: unknown): string | undefined {
   const details = data
     .filter(isRecord)
     .map((record) => {
-      const filename =
-        typeof record.original_filename === "string"
-          ? record.original_filename
-          : undefined;
-      const status =
-        typeof record.status === "string" ? record.status : undefined;
+      const filename = getNonEmptyText(record.original_filename) ?? undefined;
+      const status = getNonEmptyText(record.status) ?? undefined;
 
       if (filename && status) {
         return `${filename} — ${status}`;
@@ -337,9 +398,24 @@ function getUploadedRecordDetails(data: unknown): string | undefined {
 
 export default function ExploreScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [user, setUser] = useState<StoredUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isSettingsVisible, setIsSettingsVisible] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<"account" | "password">(
+    "account",
+  );
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [passwordChangeError, setPasswordChangeError] = useState<string | null>(
+    null,
+  );
+  const [passwordChangeSuccess, setPasswordChangeSuccess] = useState<
+    string | null
+  >(null);
   const [selectedDocument, setSelectedDocument] =
     useState<File | null>(null);
   const [selectedDocumentType, setSelectedDocumentType] = useState<
@@ -347,6 +423,9 @@ export default function ExploreScreen() {
   >(null);
   const [isUploading, setIsUploading] = useState(false);
   const [records, setRecords] = useState<MedicalRecord[]>([]);
+  const [deletingRecordIds, setDeletingRecordIds] = useState<string[]>([]);
+  const [recordDeleteNotice, setRecordDeleteNotice] = useState<string | null>(null);
+  const [recordDeleteError, setRecordDeleteError] = useState<string | null>(null);
   const [isRecordsLoading, setIsRecordsLoading] = useState(false);
   const [hasLoadedRecords, setHasLoadedRecords] = useState(false);
   const [recordsError, setRecordsError] = useState<string | null>(null);
@@ -369,18 +448,27 @@ export default function ExploreScreen() {
     string | null
   >(null);
   const isUploadInProgress = useRef(false);
+  const activeRecordDeletions = useRef(new Set<string>());
+  const activeEventRequests = useRef(0);
 
-  const eventTypeCounts = useMemo(
-    () => ({
-      tests: medicalEvents.filter(
-        (event) => getEventCategory(event.event_type) === "Tests",
-      ).length,
-      visits: medicalEvents.filter(
-        (event) => getEventCategory(event.event_type) === "Visits",
-      ).length,
-    }),
-    [medicalEvents],
-  );
+  const eventTypeCounts = useMemo(() => {
+    const counts: Record<SummaryEventCategory, number> = {
+      Visits: 0,
+      Tests: 0,
+      Diagnoses: 0,
+      Treatments: 0,
+      Medications: 0,
+    };
+
+    for (const event of medicalEvents) {
+      const category = getEventCategory(event.event_type);
+      if (category && category !== "All") {
+        counts[category] += 1;
+      }
+    }
+
+    return counts;
+  }, [medicalEvents]);
 
   const filteredMedicalEvents = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -510,6 +598,7 @@ export default function ExploreScreen() {
 
   const loadEvents = useCallback(
     async (providedToken?: string) => {
+      activeEventRequests.current += 1;
       setIsEventsLoading(true);
       setEventsError(null);
 
@@ -562,11 +651,98 @@ export default function ExploreScreen() {
             : "Unable to load medical events. Please try again.",
         );
       } finally {
-        setIsEventsLoading(false);
+        activeEventRequests.current = Math.max(
+          0,
+          activeEventRequests.current - 1,
+        );
+        setIsEventsLoading(activeEventRequests.current > 0);
       }
     },
     [router],
   );
+
+  async function deleteMedicalRecord(recordId: string) {
+    if (activeRecordDeletions.current.has(recordId)) {
+      return;
+    }
+
+    activeRecordDeletions.current.add(recordId);
+    setDeletingRecordIds(Array.from(activeRecordDeletions.current));
+    setRecordDeleteNotice(null);
+    setRecordDeleteError(null);
+
+    try {
+      const accessToken = await SecureStore.getItemAsync("access_token");
+      if (!accessToken) {
+        router.replace("/login");
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/records/${encodeURIComponent(recordId)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        router.replace("/login");
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      if (!response.ok) {
+        let responseData: unknown = null;
+        try {
+          responseData = await response.json();
+        } catch {
+          responseData = null;
+        }
+        const detail = getBackendDetail(responseData);
+        throw new Error(
+          detail
+            ? `HTTP ${response.status}: ${detail}`
+            : `Could not delete this medical record (HTTP ${response.status}).`,
+        );
+      }
+
+      setRecords((currentRecords) =>
+        currentRecords.filter((record) => record.id !== recordId),
+      );
+      setRecordDeleteNotice("Medical record deleted.");
+      await loadEvents(accessToken);
+    } catch (error: unknown) {
+      setRecordDeleteError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete this medical record. Please try again.",
+      );
+    } finally {
+      activeRecordDeletions.current.delete(recordId);
+      setDeletingRecordIds(Array.from(activeRecordDeletions.current));
+    }
+  }
+
+  function confirmDeleteMedicalRecord(record: MedicalRecord) {
+    if (activeRecordDeletions.current.has(record.id)) {
+      return;
+    }
+
+    Alert.alert(
+      "Delete medical record?",
+      "Are you sure you want to delete this medical record? This will also remove the extracted events associated with it.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => void deleteMedicalRecord(record.id),
+        },
+      ],
+    );
+  }
 
   useEffect(() => {
     let isActive = true;
@@ -666,7 +842,112 @@ export default function ExploreScreen() {
     setIsFilterSheetVisible(false);
   }
 
+  function openSettings() {
+    setSettingsPage("account");
+    setIsSettingsVisible(true);
+  }
+
+  function closeSettings() {
+    setIsSettingsVisible(false);
+    setSettingsPage("account");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setPasswordChangeError(null);
+    setPasswordChangeSuccess(null);
+  }
+
+  function openChangePassword() {
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setPasswordChangeError(null);
+    setPasswordChangeSuccess(null);
+    setSettingsPage("password");
+  }
+
+  async function submitPasswordChange() {
+    if (isChangingPassword) {
+      return;
+    }
+    setPasswordChangeError(null);
+    setPasswordChangeSuccess(null);
+
+    const newPasswordLength = Array.from(newPassword).length;
+    if (newPasswordLength < 8 || newPasswordLength > 128) {
+      setPasswordChangeError("New password must be between 8 and 128 characters.");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setPasswordChangeError(
+        "Choose a new password that differs from your current password.",
+      );
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordChangeError("New passwords do not match.");
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const accessToken = await SecureStore.getItemAsync("access_token");
+      if (!accessToken) {
+        setIsSettingsVisible(false);
+        router.replace("/login");
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/auth/change-password`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      });
+
+      let responseData: unknown = null;
+      try {
+        responseData = await response.json();
+      } catch {
+        responseData = null;
+      }
+
+      if (response.status === 401) {
+        setIsSettingsVisible(false);
+        router.replace("/login");
+        throw new Error("Your session has expired. Please sign in again.");
+      }
+      if (!response.ok) {
+        throw new Error(
+          getBackendDetail(responseData) ??
+            `Could not change password (HTTP ${response.status}).`,
+        );
+      }
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setPasswordChangeSuccess("Password changed successfully.");
+    } catch (error: unknown) {
+      setPasswordChangeError(
+        error instanceof Error
+          ? error.message
+          : "Unable to change your password. Please try again.",
+      );
+    } finally {
+      setIsChangingPassword(false);
+    }
+  }
+
   async function handleLogout() {
+    if (isLoggingOut) {
+      return;
+    }
     setIsLoggingOut(true);
 
     try {
@@ -674,6 +955,7 @@ export default function ExploreScreen() {
         SecureStore.deleteItemAsync("access_token"),
         SecureStore.deleteItemAsync("user"),
       ]);
+      closeSettings();
       router.replace("/login");
     } catch {
       Alert.alert(
@@ -683,6 +965,20 @@ export default function ExploreScreen() {
     } finally {
       setIsLoggingOut(false);
     }
+  }
+
+  function confirmLogout() {
+    if (isLoggingOut) {
+      return;
+    }
+    Alert.alert("Log out?", "Are you sure you want to log out?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Log Out",
+        style: "destructive",
+        onPress: () => void handleLogout(),
+      },
+    ]);
   }
 
   async function chooseDocument() {
@@ -855,7 +1151,7 @@ export default function ExploreScreen() {
 
   if (isLoading || !user) {
     return (
-      <SafeAreaView style={styles.loadingContainer}>
+      <SafeAreaView style={styles.loadingContainer} edges={["top", "left", "right"]}>
         <ActivityIndicator color="#0F766E" size="large" />
         <Text style={styles.loadingText}>Loading your medical timeline...</Text>
       </SafeAreaView>
@@ -863,9 +1159,12 @@ export default function ExploreScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={["top", "left", "right"]}>
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: Math.max(insets.bottom, 16) + 32 },
+        ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -878,7 +1177,7 @@ export default function ExploreScreen() {
           </View>
           <Pressable
             style={styles.settingsButton}
-            onPress={() => Alert.alert("Settings", "Account settings are coming soon.")}
+            onPress={openSettings}
             accessibilityRole="button"
             accessibilityLabel="Settings"
           >
@@ -911,15 +1210,16 @@ export default function ExploreScreen() {
           </View>
           {hasLoadedEvents && !eventsError ? (
             <View style={mobileStyles.summaryStats}>
-              <View style={mobileStyles.summaryStat}>
-                <Text style={mobileStyles.summaryValue}>{eventTypeCounts.tests}</Text>
-                <Text style={mobileStyles.summaryLabel}>Tests</Text>
-              </View>
-              <View style={mobileStyles.statDivider} />
-              <View style={mobileStyles.summaryStat}>
-                <Text style={mobileStyles.summaryValue}>{eventTypeCounts.visits}</Text>
-                <Text style={mobileStyles.summaryLabel}>Visits</Text>
-              </View>
+              {SUMMARY_EVENT_CATEGORIES.map((category) => (
+                <View key={category} style={mobileStyles.summaryStat}>
+                  <Text style={mobileStyles.summaryValue}>
+                    {eventTypeCounts[category]}
+                  </Text>
+                  <Text style={mobileStyles.summaryLabel}>
+                    {getSummaryCategoryLabel(category, eventTypeCounts[category])}
+                  </Text>
+                </View>
+              ))}
               <Text style={mobileStyles.summaryNote}>Based on extracted events</Text>
             </View>
           ) : eventsError ? (
@@ -950,9 +1250,11 @@ export default function ExploreScreen() {
                   </Text>
                   <Text style={mobileStyles.documentMeta}>
                     {selectedDocumentType}
-                    {typeof selectedDocument.size === "number"
-                      ? " · " + formatFileSize(selectedDocument.size)
-                      : ""}
+                  {typeof selectedDocument.size === "number" &&
+                  Number.isFinite(selectedDocument.size) &&
+                  selectedDocument.size >= 0
+                    ? " · " + formatFileSize(selectedDocument.size)
+                    : ""}
                   </Text>
                 </View>
               </View>
@@ -1003,9 +1305,9 @@ export default function ExploreScreen() {
             </View>
             <View style={mobileStyles.headingActions}>
               {isEventsLoading ? (
-                <ActivityIndicator color="#0F766E" size="small" />
+                <Text style={mobileStyles.updatingLabel}>Updating</Text>
               ) : hasLoadedEvents && !eventsError ? (
-                <Text style={mobileStyles.mutedCount}>
+      <Text style={mobileStyles.mutedCount}>
                   {medicalEvents.length} {medicalEvents.length === 1 ? "event" : "events"}
                 </Text>
               ) : null}
@@ -1016,9 +1318,7 @@ export default function ExploreScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Refresh medical events"
               >
-                <Text style={mobileStyles.refreshText}>
-                  {isEventsLoading ? "Updating" : "Refresh"}
-                </Text>
+                <Text style={mobileStyles.refreshText}>Refresh</Text>
               </Pressable>
             </View>
           </View>
@@ -1185,18 +1485,17 @@ export default function ExploreScreen() {
                       </View>
                     </View>
                     <Text style={mobileStyles.eventTitle}>
-                      {typeof event.title === "string" && event.title.trim()
-                        ? event.title.trim()
-                        : formatEventType(event.event_type) || "Medical event"}
+                      {getNonEmptyText(event.title) ??
+                        (formatEventType(event.event_type) || "Medical event")}
                     </Text>
-                    {event.description.trim() ? (
+                    {getNonEmptyText(event.description) ? (
                       <Text style={mobileStyles.eventDescription}>
-                        {event.description.trim()}
+                        {getNonEmptyText(event.description)}
                       </Text>
                     ) : null}
-                    {typeof event.provider === "string" && event.provider.trim() ? (
+                    {getNonEmptyText(event.provider) ? (
                       <Text style={mobileStyles.eventMetadata}>
-                        Provider: {event.provider.trim()}
+                        Provider: {getNonEmptyText(event.provider)}
                       </Text>
                     ) : null}
                     {typeof event.source_page === "number" &&
@@ -1235,6 +1534,23 @@ export default function ExploreScreen() {
               </Text>
             ) : null}
           </View>
+
+          {recordDeleteNotice ? (
+            <Text
+              style={mobileStyles.recordDeleteNotice}
+              accessibilityLiveRegion="polite"
+            >
+              {recordDeleteNotice}
+            </Text>
+          ) : null}
+          {recordDeleteError ? (
+            <Text
+              style={mobileStyles.recordDeleteError}
+              accessibilityLiveRegion="polite"
+            >
+              {recordDeleteError}
+            </Text>
+          ) : null}
 
           {recordsError ? (
             <View style={mobileStyles.errorCard}>
@@ -1281,53 +1597,78 @@ export default function ExploreScreen() {
                 : status === "failed"
                   ? mobileStyles.statusFailed
                   : mobileStyles.statusProcessing;
+            const statusTextStyle =
+              status === "completed"
+                ? mobileStyles.statusTextCompleted
+                : status === "failed"
+                  ? mobileStyles.statusTextFailed
+                  : mobileStyles.statusTextProcessing;
             const statusIcon =
               status === "completed" ? "✓" : status === "failed" ? "!" : "◷";
 
             return (
               <View key={record.id} style={mobileStyles.recordCard}>
                 <Text style={mobileStyles.recordFilename}>
-                  {record.original_filename.trim() || "Medical document"}
+                  {getNonEmptyText(record.original_filename) ??
+                    "Medical document"}
                 </Text>
                 <View style={[mobileStyles.recordStatus, statusStyle]}>
-                  <Text style={[mobileStyles.recordStatusIcon, statusStyle]}>
+                  <Text
+                    style={[mobileStyles.recordStatusIcon, statusTextStyle]}
+                  >
                     {statusIcon}
                   </Text>
-                  <Text style={[mobileStyles.recordStatusText, statusStyle]}>
+                  <Text
+                    style={[mobileStyles.recordStatusText, statusTextStyle]}
+                  >
                     {getRecordStatusLabel(record.status)}
                   </Text>
                 </View>
                 <Text style={mobileStyles.recordDate}>
                   Uploaded {formatRecordDate(record.uploaded_at)}
                 </Text>
-                {typeof record.processed_at === "string" &&
-                record.processed_at.trim() ? (
+                {getNonEmptyText(record.processed_at) ? (
                   <Text style={mobileStyles.recordDate}>
-                    Processed {formatRecordDate(record.processed_at)}
+                    Processed {formatRecordDate(
+                      getNonEmptyText(record.processed_at) ?? "",
+                    )}
                   </Text>
                 ) : null}
                 {status === "failed" &&
-                typeof record.error_message === "string" &&
-                record.error_message.trim() ? (
-                  <Text style={mobileStyles.recordError}>
-                    {record.error_message.trim()}
+                getNonEmptyText(record.error_message) ? (
+                  <Text style={mobileStyles.recordError} numberOfLines={2}>
+                    {getNonEmptyText(record.error_message)}
                   </Text>
                 ) : null}
+                <View style={mobileStyles.recordActions}>
+                  <Pressable
+                    style={[
+                      mobileStyles.deleteRecordButton,
+                      deletingRecordIds.includes(record.id) &&
+                        mobileStyles.deleteRecordButtonDisabled,
+                    ]}
+                    onPress={() => confirmDeleteMedicalRecord(record)}
+                    disabled={deletingRecordIds.includes(record.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${getNonEmptyText(record.original_filename) ?? "medical record"}`}
+                  >
+                    {deletingRecordIds.includes(record.id) ? (
+                      <>
+                        <ActivityIndicator size="small" color="#9B3830" />
+                        <Text style={mobileStyles.deleteRecordText}>
+                          Deleting...
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={mobileStyles.deleteRecordText}>Delete</Text>
+                    )}
+                  </Pressable>
+                </View>
               </View>
             );
           })}
         </View>
 
-        <Pressable
-          style={styles.logoutButton}
-          onPress={handleLogout}
-          disabled={isLoggingOut}
-          accessibilityRole="button"
-        >
-          <Text style={styles.logoutButtonText}>
-            {isLoggingOut ? "Logging out..." : "Log Out"}
-          </Text>
-        </Pressable>
       </ScrollView>
 
       <Modal
@@ -1343,7 +1684,12 @@ export default function ExploreScreen() {
             accessibilityRole="button"
             accessibilityLabel="Close filters"
           />
-          <View style={mobileStyles.filterSheet}>
+          <View
+            style={[
+              mobileStyles.filterSheet,
+              { paddingBottom: Math.max(insets.bottom, 16) + 16 },
+            ]}
+          >
             <View style={mobileStyles.sheetHandle} />
             <View style={mobileStyles.filterSheetHeader}>
               <Text style={mobileStyles.filterSheetTitle}>Filter medical events</Text>
@@ -1453,6 +1799,211 @@ export default function ExploreScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={isSettingsVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeSettings}
+      >
+        <View style={mobileStyles.settingsBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={closeSettings}
+            accessibilityRole="button"
+            accessibilityLabel="Close account settings"
+          />
+          <View
+            style={[
+              mobileStyles.settingsPanel,
+              { paddingBottom: Math.max(insets.bottom, 16) + 12 },
+            ]}
+          >
+            <View style={mobileStyles.sheetHandle} />
+            <View style={mobileStyles.settingsHeader}>
+              {settingsPage === "password" ? (
+                <Pressable
+                  style={mobileStyles.settingsHeaderAction}
+                  onPress={() => setSettingsPage("account")}
+                  accessibilityRole="button"
+                  hitSlop={8}
+                >
+                  <Text style={mobileStyles.settingsHeaderActionText}>Back</Text>
+                </Pressable>
+              ) : (
+                <View style={mobileStyles.settingsHeaderSpacer} />
+              )}
+              <Text style={mobileStyles.settingsTitle}>
+                {settingsPage === "password"
+                  ? "Change Password"
+                  : "Account Settings"}
+              </Text>
+              <Pressable
+                style={mobileStyles.settingsHeaderAction}
+                onPress={closeSettings}
+                accessibilityRole="button"
+                accessibilityLabel="Close settings"
+                hitSlop={8}
+              >
+                <Text style={mobileStyles.settingsHeaderActionText}>Close</Text>
+              </Pressable>
+            </View>
+
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={mobileStyles.settingsContent}
+            >
+              {settingsPage === "account" ? (
+                <>
+                  <View style={mobileStyles.settingsCard}>
+                    <Text style={mobileStyles.settingsSectionLabel}>PROFILE</Text>
+                    <View style={mobileStyles.settingsField}>
+                      <Text style={mobileStyles.settingsFieldLabel}>Full name</Text>
+                      <Text style={mobileStyles.settingsFieldValue}>
+                        {getNonEmptyText(user.full_name) ?? "Not available"}
+                      </Text>
+                    </View>
+                    <View style={mobileStyles.settingsDivider} />
+                    <View style={mobileStyles.settingsField}>
+                      <Text style={mobileStyles.settingsFieldLabel}>Email</Text>
+                      <Text style={mobileStyles.settingsFieldValue}>
+                        {getNonEmptyText(user.email) ?? "Not available"}
+                      </Text>
+                    </View>
+                    <View style={mobileStyles.settingsDivider} />
+                    <View style={mobileStyles.settingsField}>
+                      <Text style={mobileStyles.settingsFieldLabel}>
+                        Account type
+                      </Text>
+                      <Text style={mobileStyles.settingsFieldValue}>
+                        {formatAccountType(user.account_type)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={mobileStyles.settingsCard}>
+                    <Text style={mobileStyles.settingsSectionLabel}>SECURITY</Text>
+                    <Pressable
+                      style={mobileStyles.settingsMenuButton}
+                      onPress={openChangePassword}
+                      accessibilityRole="button"
+                    >
+                      <View style={mobileStyles.settingsMenuCopy}>
+                        <Text style={mobileStyles.settingsMenuTitle}>
+                          Change Password
+                        </Text>
+                        <Text style={mobileStyles.settingsMenuDescription}>
+                          Update your account password
+                        </Text>
+                      </View>
+                      <Text
+                        style={mobileStyles.settingsChevron}
+                        accessibilityElementsHidden
+                      >
+                        ›
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  <View style={mobileStyles.settingsCard}>
+                    <Text style={mobileStyles.settingsSectionLabel}>ACCOUNT</Text>
+                    <Pressable
+                      style={mobileStyles.settingsLogoutButton}
+                      onPress={confirmLogout}
+                      disabled={isLoggingOut}
+                      accessibilityRole="button"
+                    >
+                      {isLoggingOut ? (
+                        <ActivityIndicator size="small" color="#9B3830" />
+                      ) : null}
+                      <Text style={mobileStyles.settingsLogoutText}>
+                        {isLoggingOut ? "Logging out..." : "Log Out"}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : (
+                <View style={mobileStyles.settingsCard}>
+                  <Text style={mobileStyles.settingsSectionLabel}>SECURITY</Text>
+                  {passwordChangeError ? (
+                    <Text
+                      style={mobileStyles.passwordError}
+                      accessibilityLiveRegion="polite"
+                    >
+                      {passwordChangeError}
+                    </Text>
+                  ) : null}
+                  {passwordChangeSuccess ? (
+                    <Text
+                      style={mobileStyles.passwordSuccess}
+                      accessibilityLiveRegion="polite"
+                    >
+                      {passwordChangeSuccess}
+                    </Text>
+                  ) : null}
+
+                  <Text style={mobileStyles.passwordFieldLabel}>
+                    Current password
+                  </Text>
+                  <TextInput
+                    value={currentPassword}
+                    onChangeText={setCurrentPassword}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="password"
+                    style={mobileStyles.passwordInput}
+                    accessibilityLabel="Current password"
+                  />
+                  <Text style={mobileStyles.passwordFieldLabel}>
+                    New password
+                  </Text>
+                  <TextInput
+                    value={newPassword}
+                    onChangeText={setNewPassword}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="newPassword"
+                    style={mobileStyles.passwordInput}
+                    accessibilityLabel="New password"
+                  />
+                  <Text style={mobileStyles.passwordFieldLabel}>
+                    Confirm new password
+                  </Text>
+                  <TextInput
+                    value={confirmNewPassword}
+                    onChangeText={setConfirmNewPassword}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="newPassword"
+                    style={mobileStyles.passwordInput}
+                    accessibilityLabel="Confirm new password"
+                  />
+                  <Pressable
+                    style={[
+                      mobileStyles.passwordSubmitButton,
+                      isChangingPassword && mobileStyles.passwordSubmitDisabled,
+                    ]}
+                    onPress={() => void submitPasswordChange()}
+                    disabled={isChangingPassword}
+                    accessibilityRole="button"
+                  >
+                    {isChangingPassword ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : null}
+                    <Text style={mobileStyles.passwordSubmitText}>
+                      {isChangingPassword ? "Changing password..." : "Change Password"}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1478,7 +2029,7 @@ const styles = StyleSheet.create({
     maxWidth: 640,
     alignSelf: "center",
     paddingHorizontal: 22,
-    paddingTop: 14,
+    paddingTop: 8,
     paddingBottom: 32,
   },
   header: {
@@ -1492,9 +2043,9 @@ const styles = StyleSheet.create({
     gap: 11,
   },
   logo: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     backgroundColor: "#0F766E",
     justifyContent: "center",
     alignItems: "center",
@@ -1506,12 +2057,12 @@ const styles = StyleSheet.create({
   },
   appName: {
     color: "#0F172A",
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "800",
   },
   settingsButton: {
-    width: 42,
-    height: 42,
+    width: 44,
+    height: 44,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: "#E2E8F0",
@@ -1524,8 +2075,8 @@ const styles = StyleSheet.create({
     fontSize: 21,
   },
   greetingSection: {
-    marginTop: 30,
-    marginBottom: 22,
+    marginTop: 20,
+    marginBottom: 16,
   },
   greeting: {
     color: "#0F172A",
@@ -1897,21 +2448,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 8,
   },
-  logoutButton: {
-    minHeight: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 22,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#CBD5E1",
-    backgroundColor: "#FFFFFF",
-  },
-  logoutButtonText: {
-    color: "#475569",
-    fontSize: 15,
-    fontWeight: "700",
-  },
 });
 
 const mobileStyles = StyleSheet.create({
@@ -1953,36 +2489,39 @@ const mobileStyles = StyleSheet.create({
   summaryStats: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
+    gap: 7,
     marginTop: 13,
     paddingTop: 11,
     borderTopWidth: 1,
     borderTopColor: "#EFF3F1",
   },
   summaryStat: {
-    minWidth: 63,
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 10,
+    backgroundColor: "#F3F8F6",
   },
   summaryValue: {
     color: "#0F766E",
-    fontSize: 22,
+    fontSize: 14,
     fontWeight: "800",
   },
   summaryLabel: {
     color: "#647875",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  statDivider: {
-    width: 1,
-    height: 32,
-    marginHorizontal: 13,
-    backgroundColor: "#E6EEEB",
+    fontSize: 10,
+    fontWeight: "700",
   },
   summaryNote: {
-    flex: 1,
+    width: "100%",
     color: "#83938F",
     fontSize: 10,
     lineHeight: 14,
-    textAlign: "right",
+    marginTop: 1,
   },
   summaryMessage: {
     color: "#748580",
@@ -2107,6 +2646,11 @@ const mobileStyles = StyleSheet.create({
     color: "#71827D",
     fontSize: 10,
     fontWeight: "600",
+  },
+  updatingLabel: {
+    color: "#0F766E",
+    fontSize: 10,
+    fontWeight: "700",
   },
   refreshButton: {
     minHeight: 39,
@@ -2438,6 +2982,18 @@ const mobileStyles = StyleSheet.create({
   recordsSection: {
     marginTop: 24,
   },
+  recordDeleteNotice: {
+    color: "#0F766E",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 9,
+  },
+  recordDeleteError: {
+    color: "#9B3830",
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 9,
+  },
   recordsEmptyCard: {
     marginTop: 11,
     padding: 17,
@@ -2471,24 +3027,30 @@ const mobileStyles = StyleSheet.create({
     borderRadius: 9,
   },
   statusCompleted: {
-    color: "#0F766E",
     backgroundColor: "#E6F4F1",
   },
   statusProcessing: {
-    color: "#8A620E",
     backgroundColor: "#FBF2D9",
   },
   statusFailed: {
-    color: "#8A4B45",
     backgroundColor: "#F8EAE8",
   },
+  statusTextCompleted: {
+    color: "#0F766E",
+  },
+  statusTextProcessing: {
+    color: "#8A620E",
+  },
+  statusTextFailed: {
+    color: "#8A4B45",
+  },
   recordStatusIcon: {
-    fontSize: 10,
-    lineHeight: 13,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: "800",
   },
   recordStatusText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: "800",
   },
   recordDate: {
@@ -2504,6 +3066,196 @@ const mobileStyles = StyleSheet.create({
     padding: 8,
     borderRadius: 8,
     backgroundColor: "#FCF5F4",
+  },
+  recordActions: {
+    alignItems: "flex-end",
+    marginTop: 7,
+  },
+  deleteRecordButton: {
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 9,
+    borderRadius: 9,
+    backgroundColor: "#FFF8F7",
+  },
+  deleteRecordButtonDisabled: {
+    opacity: 0.65,
+  },
+  deleteRecordText: {
+    color: "#9B3830",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  settingsBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(15, 23, 42, 0.36)",
+  },
+  settingsPanel: {
+    width: "100%",
+    maxWidth: 520,
+    maxHeight: "92%",
+    alignSelf: "center",
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    backgroundColor: "#FFFFFF",
+  },
+  settingsHeader: {
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  settingsHeaderAction: {
+    width: 52,
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  settingsHeaderActionText: {
+    color: "#0F766E",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  settingsHeaderSpacer: {
+    width: 52,
+  },
+  settingsTitle: {
+    flex: 1,
+    color: "#173B35",
+    fontSize: 16,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  settingsContent: {
+    paddingBottom: 5,
+  },
+  settingsCard: {
+    marginBottom: 10,
+    padding: 15,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E0E9E5",
+    backgroundColor: "#FFFFFF",
+  },
+  settingsSectionLabel: {
+    color: "#0F766E",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  settingsField: {
+    paddingVertical: 9,
+  },
+  settingsFieldLabel: {
+    color: "#7A8985",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  settingsFieldValue: {
+    color: "#173B35",
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "700",
+    marginTop: 3,
+  },
+  settingsDivider: {
+    height: 1,
+    backgroundColor: "#EFF3F1",
+  },
+  settingsMenuButton: {
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 5,
+  },
+  settingsMenuCopy: {
+    flex: 1,
+  },
+  settingsMenuTitle: {
+    color: "#173B35",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  settingsMenuDescription: {
+    color: "#7A8985",
+    fontSize: 11,
+    marginTop: 3,
+  },
+  settingsChevron: {
+    color: "#0F766E",
+    fontSize: 24,
+    marginLeft: 10,
+  },
+  settingsLogoutButton: {
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 5,
+    borderRadius: 12,
+    backgroundColor: "#FFF5F4",
+  },
+  settingsLogoutText: {
+    color: "#9B3830",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  passwordFieldLabel: {
+    color: "#52645F",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  passwordInput: {
+    minHeight: 48,
+    paddingHorizontal: 12,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#DDE7E3",
+    color: "#173B35",
+    fontSize: 14,
+    backgroundColor: "#FFFFFF",
+  },
+  passwordError: {
+    color: "#9B3830",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 8,
+  },
+  passwordSuccess: {
+    color: "#0F766E",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 8,
+  },
+  passwordSubmitButton: {
+    minHeight: 49,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 20,
+    borderRadius: 12,
+    backgroundColor: "#0F766E",
+  },
+  passwordSubmitDisabled: {
+    opacity: 0.75,
+  },
+  passwordSubmitText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800",
   },
   filterBackdrop: {
     flex: 1,

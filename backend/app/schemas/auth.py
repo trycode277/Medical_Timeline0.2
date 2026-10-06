@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import EmailStr, field_validator
+from pydantic import ConfigDict, EmailStr, field_validator
 from sqlmodel import Field, SQLModel
 
 from app.models.enums import AccountType
@@ -40,6 +40,13 @@ class LoginRequest(SQLModel):
         if isinstance(value, str):
             return value.strip().lower()
         return value
+
+
+class ChangePasswordRequest(SQLModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class UserRead(SQLModel):

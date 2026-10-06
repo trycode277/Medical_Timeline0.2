@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import SessionDep
+from app.api.deps import SessionDep, get_current_user
 from app.core.security import (
     AuthenticationConfigurationError,
     create_access_token,
@@ -13,7 +15,13 @@ from app.core.security import (
 from app.models.enums import AccountType
 from app.models.patient import Patient
 from app.models.user import User
-from app.schemas.auth import LoginRequest, LoginResponse, RegisterRequest, UserRead
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    LoginResponse,
+    RegisterRequest,
+    UserRead,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -90,3 +98,36 @@ async def login(payload: LoginRequest, session: SessionDep):
         "token_type": "bearer",
         "user": user,
     }
+
+
+@router.post("/change-password")
+async def change_password(
+    payload: ChangePasswordRequest,
+    session: SessionDep,
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, str]:
+    password_matches = await run_in_threadpool(
+        verify_password, payload.current_password, current_user.password_hash
+    )
+    if not password_matches:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+    if payload.new_password == payload.current_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password.",
+        )
+
+    current_user.password_hash = await run_in_threadpool(
+        hash_password, payload.new_password
+    )
+    session.add(current_user)
+    try:
+        await session.commit()
+    except BaseException:
+        await session.rollback()
+        raise
+
+    return {"message": "Password changed successfully."}
